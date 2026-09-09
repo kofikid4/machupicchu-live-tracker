@@ -51,13 +51,23 @@ length), `avisos-public` (notices), plus a CAPTCHA widget.
 
 ## Open problems
 
-1. **Fails during Peru business hours.** 08:58 Lima on a GitHub runner: page
-   loaded, no availability payload in 60 s. Worked fine at 04:05. Unknown whether
-   this is the CAPTCHA challenging datacenter IPs, the site being slow under
-   load, or a 403. The current code now reports per-endpoint HTTP statuses on
-   failure, which should settle it. **The decisive test is running locally and on
-   a runner at the same moment**, since the only difference is residential versus
-   datacenter IP.
+1. **Intermittently fails to capture a payload, cause still unknown.** 08:58
+   Lima on a GitHub runner: page loaded, no availability payload in 60 s.
+   Worked fine at 04:05. Recurred 2026-09-09T14:14 UTC (09:14 Lima), also on a
+   runner, `ok=False ... page loaded but no availability payload captured`; no
+   debug artifact exists for that one since the artifact-upload step hadn't
+   been added yet at the commit that ran.
+
+   Ran the decisive test 2026-09-09T22:18 UTC (17:18 Lima, solidly business
+   hours): local (residential IP) and a fresh runner (datacenter IP) both
+   dispatched at the same moment, both succeeded (`ok=True`, 6 routes, payload
+   captured in well under the 90s timeout on the runner). **This refutes
+   datacenter-IP/CAPTCHA blocking as a deterministic per-request rule** — a
+   runner can and does succeed during business hours. The failure is
+   real but intermittent; cause still open. Debug artifacts now upload on
+   every failure (added in the commit that also added retries), so the next
+   occurrence should carry forensic evidence (per-endpoint HTTP statuses,
+   screenshot, HTML) instead of just the one-line summary above.
 
 2. **Scheduled workflows drop most ticks.** Measured 2026-09-09: workflow state
    `active`, permissions fine, no billing block, but of 14 due ticks in the old
