@@ -3,14 +3,21 @@ name: scrape
 on:
   schedule:
     # All times UTC. Lima is UTC-5 year round. The pool opens 06:00 Lima = 11:00 UTC.
-    # Deliberately off the top of the hour: GitHub drops :00 schedules first.
     #
-    # 10:47-16:47 UTC = 05:47-11:47 Lima. The window where sellouts happen.
-    # Each run polls internally for 25 min, so one surviving run still yields
-    # five samples even if the scheduler eats the others.
-    - cron: "17,47 10-16 * * *"
-    # 17:17-04:47 UTC = 12:17-23:47 Lima. Slower half of the sale day.
-    - cron: "17,47 17-23,0-4 * * *"
+    # 2026-09-09: measured schedule delivery over a full day. Of 14 due ticks in
+    # the old twice-an-hour rush cron, only 3 runs actually landed (~21%). No
+    # queued/skipped runs existed either: GitHub's scheduler never created them.
+    # This is documented best-effort behavior on GitHub's side, not something a
+    # cron expression can fix, so the mitigation is more independent ticks
+    # rather than a "smarter" schedule. Every 5 minutes is GitHub's minimum
+    # granularity.
+    #
+    # 10:00-16:55 UTC = 05:00-11:55 Lima. The window where sellouts happen.
+    - cron: "*/5 10-16 * * *"
+    # 17:00-04:55 UTC = 12:00-23:55 Lima. Slower half of the sale day, tightened
+    # to the same cadence since delivery is unreliable everywhere, not just the
+    # rush window.
+    - cron: "*/5 17-23,0-4 * * *"
     # 05:17-10:17 UTC = 00:17-05:17 Lima. Pool frozen, heartbeat only.
     - cron: "17 5-9 * * *"
   workflow_dispatch:
@@ -46,12 +53,14 @@ jobs:
 
       - name: Poll
         run: |
-          # Between 10:00 and 17:00 UTC (the selling window) hold the runner and
-          # poll every 5 minutes, so a single surviving cron covers the gap left
-          # by any that got dropped. Outside that, one poll and out.
+          # Cron now fires every 5 minutes across both selling-hours blocks, so
+          # each run only needs to cover its own tick. Keep a short internal
+          # loop in the 10:00-16:55 UTC rush window as insurance against a
+          # single dropped tick, without running long enough to queue up
+          # behind the next scheduled invocation.
           H=$(date -u +%H)
           if [ "$H" -ge 10 ] && [ "$H" -le 16 ]; then
-            python scrape.py --debug --loop 25 --every 5
+            python scrape.py --debug --loop 10 --every 5
           else
             python scrape.py --debug
           fi

@@ -59,12 +59,21 @@ length), `avisos-public` (notices), plus a CAPTCHA widget.
    a runner at the same moment**, since the only difference is residential versus
    datacenter IP.
 
-2. **Scheduled workflows are not firing.** Workflow state is `active`, crons are
-   valid, but zero scheduled runs in five hours. Only `workflow_dispatch` works.
-   Crons have been moved off :00 (GitHub drops those first) and each run now
-   loops internally so a surviving run covers a span. If this stays broken, move
-   to `launchd` on a Mac or a Raspberry Pi pushing to the same repo. That also
-   solves problem 1 if it turns out to be the CAPTCHA.
+2. **Scheduled workflows drop most ticks.** Measured 2026-09-09: workflow state
+   `active`, permissions fine, no billing block, but of 14 due ticks in the old
+   twice-an-hour rush cron only 3 runs actually landed (~21%), and none of the
+   missing ones show up as queued or skipped, meaning GitHub's scheduler never
+   created them. `workflow_dispatch` fired all 3 times it was tried. This is
+   documented best-effort delivery on GitHub's side, not a fixable config bug.
+   Mitigation applied: cron tightened to every 5 minutes (GitHub's minimum
+   granularity) across both selling-hours blocks, on the theory that more
+   independent ticks partially offsets a fixed drop rate, plus a short internal
+   retry loop in the rush window. This does not guarantee 5-minute resolution
+   at a ~75-80% drop rate; the user declined the `launchd`-on-a-Mac fallback
+   for now (would sidestep GitHub's scheduler entirely and likely also solves
+   problem 1, since it's residential IP instead of datacenter) in favor of
+   watching whether the tightened cron is enough. Revisit if the next sellout
+   window still shows multi-hour gaps.
 
 ## Data
 
