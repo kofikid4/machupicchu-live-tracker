@@ -2,21 +2,17 @@ name: scrape
 
 on:
   schedule:
-    # All times UTC. Lima is UTC-5 year round, no DST.
-    # The board says "Inicia: 06:00 AM", so the pool opens at 06:00 Lima
-    # (11:00 UTC) and nothing moves before it.
+    # All times UTC. Lima is UTC-5 year round. The pool opens 06:00 Lima = 11:00 UTC.
+    # Deliberately off the top of the hour: GitHub drops :00 schedules first.
     #
-    # 10:45-14:59 UTC = 05:45-09:59 Lima. Opening rush, every 5 minutes.
-    - cron: "*/5 11-14 * * *"
-    - cron: "45,50,55 10 * * *"
-    # 15:00-04:59 UTC = 10:00-23:59 Lima. Rest of the sale day, every 10 minutes.
-    - cron: "*/10 15-23,0-4 * * *"
-    # 05:00-10:00 UTC = 00:00-05:00 Lima. Dead of night, hourly heartbeat only.
-    - cron: "0 5-10 * * *"
-    #
-    # GitHub runs scheduled jobs late under load, sometimes by 15+ minutes, and
-    # occasionally skips one. We record the real fetch time in ts_lima and treat
-    # the schedule as a hint rather than a measurement.
+    # 10:47-16:47 UTC = 05:47-11:47 Lima. The window where sellouts happen.
+    # Each run polls internally for 25 min, so one surviving run still yields
+    # five samples even if the scheduler eats the others.
+    - cron: "17,47 10-16 * * *"
+    # 17:17-04:47 UTC = 12:17-23:47 Lima. Slower half of the sale day.
+    - cron: "17,47 17-23,0-4 * * *"
+    # 05:17-10:17 UTC = 00:17-05:17 Lima. Pool frozen, heartbeat only.
+    - cron: "17 5-9 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -29,7 +25,7 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +45,24 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Poll
-        run: python scrape.py
+        run: |
+          # Between 10:00 and 17:00 UTC (the selling window) hold the runner and
+          # poll every 5 minutes, so a single surviving cron covers the gap left
+          # by any that got dropped. Outside that, one poll and out.
+          H=$(date -u +%H)
+          if [ "$H" -ge 10 ] && [ "$H" -le 16 ]; then
+            python scrape.py --debug --loop 25 --every 5
+          else
+            python scrape.py --debug
+          fi
+
+      - name: Keep evidence when it breaks
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_id }}
+          path: debug/
+          retention-days: 7
 
       - name: Commit any changes
         run: |

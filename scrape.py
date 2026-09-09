@@ -91,10 +91,11 @@ def save_state(state: dict) -> None:
 
 # ------------------------------------------------------------------ capture
 
-def capture(debug: bool = False, timeout_ms: int = 60_000) -> dict:
+def capture(debug: bool = False, timeout_ms: int = 90_000) -> dict:
     """Open the page, harvest every availability response it makes."""
     captures = []          # {fecha, status, rows}
     other_calls = []       # for debug: everything else the app hit
+    statuses = []          # (endpoint, http status) for every api call seen
 
     with sync_playwright() as p:
         browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
@@ -107,6 +108,9 @@ def capture(debug: bool = False, timeout_ms: int = 60_000) -> dict:
 
         def on_response(resp):
             url = resp.url
+            if "api-tuboleto" in url:
+                statuses.append((url.rsplit("/", 2)[-2] + "/" + url.rsplit("/", 1)[-1],
+                                 resp.status))
             if "api-tuboleto" in url and API_MARKER not in url:
                 entry = {"url": url, "status": resp.status}
                 if debug:
@@ -156,7 +160,8 @@ def capture(debug: bool = False, timeout_ms: int = 60_000) -> dict:
 
         browser.close()
 
-    return {"captures": captures, "window": window, "other": other_calls}
+    return {"captures": captures, "window": window, "other": other_calls,
+            "statuses": statuses}
 
 
 def read_board(page) -> dict:
@@ -215,21 +220,38 @@ def fetch_ticket_counter(fecha: str):
 
 # --------------------------------------------------------------------- poll
 
-def poll(debug: bool = False) -> dict:
+def poll(debug: bool = False, retries: int = 2) -> dict:
     started = time.time()
     now = datetime.now(timezone.utc)
     ts_utc = now.isoformat(timespec="seconds")
     ts_lima = now.astimezone(LIMA).isoformat(timespec="seconds")
 
     ok, note = True, ""
-    result = {"captures": [], "window": [], "other": []}
-    try:
-        result = capture(debug=debug)
-    except Exception as exc:
-        ok = False
-        note = f"{type(exc).__name__}: {exc}"[:200]
-        if debug:
-            traceback.print_exc()
+    result = {"captures": [], "window": {}, "other": [], "statuses": []}
+    for attempt in range(1, retries + 2):
+        try:
+            result = capture(debug=debug)
+            if any(isinstance(c.get("rows"), list) for c in result["captures"]):
+                ok, note = True, ""
+                break
+            ok = False
+            note = "no availability payload"
+        except Exception as exc:
+            ok = False
+            note = f"{type(exc).__name__}: {exc}"[:120]
+            if debug:
+                traceback.print_exc()
+        if attempt <= retries:
+            print(f"  attempt {attempt} failed ({note}), retrying in 20s")
+            time.sleep(20)
+
+    # Whatever went wrong, say precisely what the server actually returned.
+    if not ok:
+        seen = {}
+        for ep, st in result.get("statuses", []):
+            seen[f"{ep}={st}"] = seen.get(f"{ep}={st}", 0) + 1
+        detail = ", ".join(f"{k} x{v}" for k, v in sorted(seen.items())) or "no api calls seen at all"
+        note = f"{note}; {detail}"
 
     board = result.get("window") or {}
     state = load_state()
@@ -271,9 +293,6 @@ def poll(debug: bool = False) -> dict:
                 "vendidos": (ncupo - actual) if None not in (ncupo, actual) else None,
             })
 
-    if not dates and ok:
-        ok, note = False, "page loaded but no availability payload captured"
-
     if obs_rows:
         append_csv(OBS_DIR / f"{now.astimezone(LIMA):%Y-%m}.csv", OBS_FIELDS, obs_rows)
         save_state(state)
@@ -312,16 +331,18 @@ def main() -> int:
                     help="keep polling for this many minutes")
     ap.add_argument("--every", type=float, default=5,
                     help="minutes between polls when looping")
+    ap.add_argument("--retries", type=int, default=2,
+                    help="retries with a fresh browser before giving up")
     args = ap.parse_args()
 
     if not args.loop:
-        return 0 if poll(debug=args.debug)["ok"] else 1
+        return 0 if poll(debug=args.debug, retries=args.retries)["ok"] else 1
 
     end = time.time() + args.loop * 60
     failures = 0
     while True:
         try:
-            if not poll(debug=args.debug)["ok"]:
+            if not poll(debug=args.debug, retries=args.retries)["ok"]:
                 failures += 1
         except Exception:
             failures += 1
