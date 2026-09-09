@@ -1,0 +1,3 @@
+# Loose pin: greenlet (a playwright dependency) ships compiled wheels per Python
+# version, so a hard pin breaks on newer interpreters. Any 1.47+ works here.
+playwright>=1.47,<2

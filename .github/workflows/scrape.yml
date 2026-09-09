@@ -1,0 +1,54 @@
+name: scrape
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub runs these late under load, sometimes by 15+ min,
+    # and occasionally skips one. That is fine: we record the real fetch time in
+    # ts_lima and treat the schedule as a hint, not a measurement.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('requirements.txt') }}
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Poll
+        run: python scrape.py
+
+      - name: Commit any changes
+        run: |
+          git config user.name  "tuboleto-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git diff --staged --quiet && echo "nothing changed" && exit 0
+          git commit -m "data: $(date -u +'%Y-%m-%dT%H:%MZ')"
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0
+            sleep $((RANDOM % 10 + 5))
+          done
+          echo "push failed after 3 attempts" && exit 1
