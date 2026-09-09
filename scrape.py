@@ -49,7 +49,8 @@ OBS_FIELDS = [
 ]
 RUN_FIELDS = [
     "ts_utc", "ts_lima", "ok", "n_dates", "n_routes", "n_changes",
-    "n_captures", "sale_window", "total_disponible", "duration_ms", "note",
+    "n_captures", "sale_window", "total_disponible", "board_fecha", "inicia",
+    "entregados", "picker_hidden", "duration_ms", "note",
 ]
 
 
@@ -59,6 +60,15 @@ def append_csv(path: Path, fields: list, rows: list) -> None:
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # If the schema has changed since this file was started, appending would
+    # silently misalign every subsequent row. Retire the old file instead.
+    if path.exists():
+        with path.open(encoding="utf-8") as fh:
+            header = (fh.readline() or "").strip().lstrip("\ufeff").split(",")
+        if header and header != fields:
+            retired = path.with_suffix(f".{int(time.time())}.csv")
+            path.rename(retired)
+            print(f"  schema changed, retired {path.name} -> {retired.name}")
     new = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
@@ -81,8 +91,7 @@ def save_state(state: dict) -> None:
 
 # ------------------------------------------------------------------ capture
 
-def capture(debug: bool = False, sweep_days: int = 0,
-            timeout_ms: int = 60_000) -> dict:
+def capture(debug: bool = False, timeout_ms: int = 60_000) -> dict:
     """Open the page, harvest every availability response it makes."""
     captures = []          # {fecha, status, rows}
     other_calls = []       # for debug: everything else the app hit
@@ -133,12 +142,7 @@ def capture(debug: bool = False, sweep_days: int = 0,
             page.wait_for_timeout(500)
         page.wait_for_timeout(4000)
 
-        sweep_note = ""
-        if sweep_days:
-            seen = {c.get("fecha") for c in captures}
-            sweep_note = sweep_window(page, sweep_days, captures, seen)
-
-        window = read_sale_window(page)
+        window = read_board(page)
 
         if debug:
             DEBUG_DIR.mkdir(exist_ok=True)
@@ -152,68 +156,46 @@ def capture(debug: bool = False, sweep_days: int = 0,
 
         browser.close()
 
-    return {"captures": captures, "window": window,
-            "other": other_calls, "sweep_note": sweep_note}
+    return {"captures": captures, "window": window, "other": other_calls}
 
 
-def sweep_window(page, days: int, captures: list, already: set) -> str:
+def read_board(page) -> dict:
     """
-    Ask the page about each date in a range by driving its own date input, so we
-    can see where the sale window ends. Dates outside the window should either
-    fire no request or come back empty, which is the boundary we want to record.
-    """
-    sel = "input[type=date]"
-    if page.query_selector(sel) is None:
-        return "no input[type=date]; sweep skipped"
-    base = datetime.now(LIMA).date()
-    for i in range(days + 1):
-        target = (base + timedelta(days=i)).isoformat()
-        if target in already:
-            continue
-        before = len(captures)
-        try:
-            page.fill(sel, target)
-            page.dispatch_event(sel, "change")
-        except Exception as exc:
-            return f"sweep failed on {target}: {type(exc).__name__}"
-        deadline = time.time() + 8
-        while time.time() < deadline and len(captures) == before:
-            page.wait_for_timeout(250)
-    return ""
+    Read what the board itself is displaying.
 
-
-def read_sale_window(page) -> list:
-    """
-    Best-effort read of which visit dates the page is offering.
-
-    The DOM structure hasn't been confirmed yet, so this tries several shapes and
-    returns whatever it finds. Run with --debug and check debug/page.html to
-    tighten this up.
+    The date picker (input#fecha) exists but its container carries Tailwind's
+    `hidden`, so the portal is locked to one visit date. If that ever changes,
+    picker_hidden flips to False and the board date moves, which is how we detect
+    the sale window widening to two or three days in a busy period. No
+    interaction needed, we just record what is on screen.
     """
     js = """
     () => {
-      const out = new Set();
-      const dateish = /\\b(20\\d\\d-\\d\\d-\\d\\d|\\d\\d\\/\\d\\d\\/20\\d\\d)\\b/g;
-      document.querySelectorAll('select option').forEach(o => {
-        (o.value + ' ' + o.textContent).match(dateish)?.forEach(m => out.add(m));
-      });
-      document.querySelectorAll('input[type=date]').forEach(i => {
-        if (i.value) out.add(i.value);
-        if (i.min) out.add('min:' + i.min);
-        if (i.max) out.add('max:' + i.max);
-      });
-      document.querySelectorAll('[class*=date],[class*=fecha],[class*=day]').forEach(e => {
-        if (e.children.length === 0) {
-          e.textContent.match(dateish)?.forEach(m => out.add(m));
-        }
-      });
-      return [...out];
+      const out = {};
+      const vis = el => el.offsetParent !== null;
+      for (const el of document.querySelectorAll('span,p,div,h1,h2,h3')) {
+        if (el.children.length || !vis(el)) continue;
+        const t = (el.textContent || '').trim();
+        let m;
+        if ((m = t.match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/)))
+          out.board_fecha = m[3] + '-' + m[2] + '-' + m[1];
+        if ((m = t.match(/Inicia:\\s*(.+)$/i)))       out.inicia = m[1].trim();
+        if ((m = t.match(/Disponibles:\\s*(\\d+)/i)))  out.disponibles = +m[1];
+        if ((m = t.match(/Entregados:\\s*(\\d+)/i)))   out.entregados = +m[1];
+      }
+      const inp = document.querySelector('input#fecha, input[type=date]');
+      if (inp) {
+        out.picker_hidden = inp.offsetParent === null;
+        out.picker_min = inp.min || null;
+        out.picker_max = inp.max || null;
+      }
+      return out;
     }
     """
     try:
-        return page.evaluate(js) or []
+        return page.evaluate(js) or {}
     except Exception:
-        return []
+        return {}
 
 
 def fetch_ticket_counter(fecha: str):
@@ -233,7 +215,7 @@ def fetch_ticket_counter(fecha: str):
 
 # --------------------------------------------------------------------- poll
 
-def poll(debug: bool = False, sweep_days: int = 0) -> dict:
+def poll(debug: bool = False) -> dict:
     started = time.time()
     now = datetime.now(timezone.utc)
     ts_utc = now.isoformat(timespec="seconds")
@@ -242,13 +224,14 @@ def poll(debug: bool = False, sweep_days: int = 0) -> dict:
     ok, note = True, ""
     result = {"captures": [], "window": [], "other": []}
     try:
-        result = capture(debug=debug, sweep_days=sweep_days)
+        result = capture(debug=debug)
     except Exception as exc:
         ok = False
         note = f"{type(exc).__name__}: {exc}"[:200]
         if debug:
             traceback.print_exc()
 
+    board = result.get("window") or {}
     state = load_state()
     obs_rows, dates, routes, total_avail = [], set(), 0, 0
 
@@ -305,14 +288,18 @@ def poll(debug: bool = False, sweep_days: int = 0) -> dict:
         "n_captures": len(result["captures"]),
         "sale_window": ";".join(sorted(dates)),
         "total_disponible": total_avail,
+        "board_fecha": board.get("board_fecha", ""),
+        "inicia": board.get("inicia", ""),
+        "entregados": board.get("entregados", ""),
+        "picker_hidden": board.get("picker_hidden", ""),
         "duration_ms": int((time.time() - started) * 1000),
-        "note": (note or result.get("sweep_note", ""))[:200],
+        "note": note[:200],
     }])
 
     print(f"[{ts_lima}] ok={ok} dates={sorted(dates)} routes={routes} "
           f"changes={len(obs_rows)} avail={total_avail} {note}")
     if debug:
-        print("  picker candidates:", result["window"])
+        print("  board:", board)
         print("  other api calls:", [c["url"].split("/")[-2:] for c in result["other"]])
     return {"ok": ok, "changes": len(obs_rows)}
 
@@ -325,19 +312,16 @@ def main() -> int:
                     help="keep polling for this many minutes")
     ap.add_argument("--every", type=float, default=5,
                     help="minutes between polls when looping")
-    ap.add_argument("--sweep", type=int, default=0, metavar="DAYS",
-                    help="drive the date input across DAYS ahead to map the "
-                         "sale window (experimental, try --sweep 7)")
     args = ap.parse_args()
 
     if not args.loop:
-        return 0 if poll(debug=args.debug, sweep_days=args.sweep)["ok"] else 1
+        return 0 if poll(debug=args.debug)["ok"] else 1
 
     end = time.time() + args.loop * 60
     failures = 0
     while True:
         try:
-            if not poll(debug=args.debug, sweep_days=args.sweep)["ok"]:
+            if not poll(debug=args.debug)["ok"]:
                 failures += 1
         except Exception:
             failures += 1
