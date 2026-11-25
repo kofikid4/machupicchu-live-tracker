@@ -595,3 +595,7 @@ ts_utc,ts_lima,fecha_visita,nid_circuito,nid_ruta,circuito,ruta,ncupo,ncupo_actu
 2026-11-25T15:44:36+00:00,2026-11-25T10:44:36-05:00,2026-11-26,2,11,Circuito 2 - Circuito clásico,Ruta 2-A: Clásico Diseñada,600,457,143
 2026-11-25T15:44:36+00:00,2026-11-25T10:44:36-05:00,2026-11-26,2,12,Circuito 2 - Circuito clásico,Ruta 2-B: Terraza Inferior,100,90,10
 2026-11-25T15:44:36+00:00,2026-11-25T10:44:36-05:00,2026-11-26,3,13,Circuito 3 - Machupicchu realeza,Ruta 3-A: Montaña Waynapicchu,50,47,3
+2026-11-25T19:47:11+00:00,2026-11-25T14:47:11-05:00,2026-11-26,2,11,Circuito 2 - Circuito clásico,Ruta 2-A: Clásico Diseñada,600,307,293
+2026-11-25T19:47:11+00:00,2026-11-25T14:47:11-05:00,2026-11-26,2,12,Circuito 2 - Circuito clásico,Ruta 2-B: Terraza Inferior,100,63,37
+2026-11-25T19:47:11+00:00,2026-11-25T14:47:11-05:00,2026-11-26,3,13,Circuito 3 - Machupicchu realeza,Ruta 3-A: Montaña Waynapicchu,50,46,4
+2026-11-25T19:47:11+00:00,2026-11-25T14:47:11-05:00,2026-11-26,3,14,Circuito 3 - Machupicchu realeza,Ruta 3-B: Realeza diseñada,100,93,7
